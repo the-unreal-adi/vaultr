@@ -82,8 +82,7 @@ def insert_file(cursor, filepath: str):
 def extract_files(destination: str):
     try:
         logging.info(f"Extracting files to destination: {destination}")
-        if not os.path.exists(destination):
-            os.makedirs(destination)
+        os.makedirs(destination, exist_ok=True)
 
         with sqlite3.connect("vaultr.db") as conn:
             cursor = conn.cursor()
@@ -95,19 +94,16 @@ def extract_files(destination: str):
                 file_path = os.path.join(destination, filename)
                 logging.info(f"Extracting file: {file_path}")
 
+                current_checksum = hashlib.sha512(filedata).hexdigest()
+                if current_checksum != checksum:
+                    logging.warning(f"Checksum mismatch for {filename}: "
+                                    f"Stored: {checksum}, Current: {current_checksum}")
+                    continue
+
                 try:
                     with open(file_path, "wb") as f:
-                        current_checksum = hashlib.sha512(filedata).hexdigest()
-                        if current_checksum != checksum:
-                            logging.warning(f"Checksum mismatch for {filename}: "
-                                            f"Stored: {checksum}, Current: {current_checksum}")
-                            f.close()
-                            if os.path.exists(file_path):
-                                os.remove(file_path)  # Remove file if checksum mismatch
-                            continue
                         f.write(filedata)
                     f.close()
-
                     logging.info(f"Successfully extracted file: {file_path}")
                 except Exception as e:
                     logging.error(f"Error extracting file {filename}: {e}")
@@ -130,6 +126,7 @@ def encrypt_file(source: str, destination: str, password: str):
 
         with sqlite3.connect("vaultr.db") as conn:
             cursor = conn.cursor()
+            conn.execute("BEGIN")
             for root, _, files in os.walk(source):
                 full_paths = [os.path.join(root, file) for file in files]
                 # Sort by creation time (oldest to newest)
