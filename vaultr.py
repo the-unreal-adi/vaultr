@@ -1,3 +1,4 @@
+import argparse
 import os
 import sys
 import hashlib
@@ -93,22 +94,19 @@ def extract_files(destination: str):
                 filename, filedata, checksum = row
                 file_path = os.path.join(destination, filename)
                 logging.info(f"Extracting file: {file_path}")
+
                 try:
                     with open(file_path, "wb") as f:
+                        current_checksum = hashlib.sha512(filedata).hexdigest()
+                        if current_checksum != checksum:
+                            logging.warning(f"Checksum mismatch for {filename}: "
+                                            f"Stored: {checksum}, Current: {current_checksum}")
+                            f.close()
+                            if os.path.exists(file_path):
+                                os.remove(file_path)  # Remove file if checksum mismatch
+                            continue
                         f.write(filedata)
                     f.close()
-
-                    checksum_hash = hashlib.sha512()
-                    with open(file_path, "rb") as f:
-                        while chunk := f.read(4096):
-                            checksum_hash.update(chunk)
-                    f.close()
-
-                    current_checksum = checksum_hash.hexdigest()
-                    if current_checksum != checksum:
-                        logging.warning(f"Checksum mismatch for {filename}: "
-                                        f"Stored: {checksum}, Current: {current_checksum}")
-                        continue
 
                     logging.info(f"Successfully extracted file: {file_path}")
                 except Exception as e:
@@ -229,22 +227,19 @@ def decrypt_file(source: str, destination: str, password: str):
         except Exception as ex:
             logging.error(f"Error removing temporary database: {ex}")
 
-# Simple CLI
 def main():
-    if len(sys.argv) != 5:
-        print("Usage:")
-        print("  Encrypt: python file_crypto.py encrypt <source> <destination> <password>")
-        print("  Decrypt: python file_crypto.py decrypt <source> <destination> <password>")
-        return
+    parser = argparse.ArgumentParser(description="VaultR - Secure File Encryptor")
+    parser.add_argument("action", choices=["encrypt", "decrypt"], help="Choose to encrypt or decrypt files")
+    parser.add_argument("source", help="Source directory or encrypted file path")
+    parser.add_argument("destination", help="Destination directory to save output")
+    parser.add_argument("password", help="Password for encryption/decryption")
 
-    action, source, destination, password = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+    args = parser.parse_args()
 
-    if action == "encrypt":
-        encrypt_file(source, destination, password)
-    elif action == "decrypt":
-        decrypt_file(source, destination, password)
-    else:
-        print("Invalid action. Use 'encrypt' or 'decrypt'.")
+    if args.action == "encrypt":
+        encrypt_file(args.source, args.destination, args.password)
+    elif args.action == "decrypt":
+        decrypt_file(args.source, args.destination, args.password)
 
 if __name__ == "__main__":
     main()
