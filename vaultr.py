@@ -10,7 +10,6 @@ from cryptography.hazmat.primitives import hashes
 import logging
 from datetime import datetime, timezone, timedelta
 
-# Ensure the logs directory exists before configuring logging
 os.makedirs("logs", exist_ok=True)
 
 logging.basicConfig(
@@ -88,16 +87,13 @@ def extract_files(destination: str):
             cursor = conn.cursor()
             cursor.execute("SELECT filename, filedata, checksum FROM files")
             rows = cursor.fetchall()
-
-            for row in rows:
-                filename, filedata, checksum = row
+            for filename, filedata, checksum in rows:
                 file_path = os.path.join(destination, filename)
                 logging.info(f"Extracting file: {file_path}")
 
                 current_checksum = hashlib.sha512(filedata).hexdigest()
                 if current_checksum != checksum:
-                    logging.warning(f"Checksum mismatch for {filename}: "
-                                    f"Stored: {checksum}, Current: {current_checksum}")
+                    logging.warning(f"Checksum mismatch for {filename}: Stored: {checksum}, Current: {current_checksum}")
                     continue
 
                 try:
@@ -107,14 +103,42 @@ def extract_files(destination: str):
                     logging.info(f"Successfully extracted file: {file_path}")
                 except Exception as e:
                     logging.error(f"Error extracting file {filename}: {e}")
-                    continue
         conn.close()
         logging.info("All files extracted successfully.")
 
     except Exception as e:
         logging.error(f"Error extracting files: {e}")
 
-# Encrypt file
+def hashed_name(base_name: str, chunk_number: int) -> str:
+    raw = f"{base_name}_{chunk_number:05d}".encode()
+    return hashlib.sha1(raw).hexdigest()
+
+def split_encrypted_file_with_padding(encrypted_content: bytes, destination: str, original_base_name: str, chunk_size: int = 1024 * 1024):
+    os.makedirs(destination, exist_ok=True)
+
+    master_hash = hashlib.sha1(original_base_name.encode() + encrypted_content).digest()
+
+    total_parts = (len(encrypted_content) + chunk_size - 1) // chunk_size
+
+    for i in range(total_parts):
+        start = i * chunk_size
+        end = start + chunk_size
+        chunk = encrypted_content[start:end]
+
+        if len(chunk) < chunk_size:
+            padding = os.urandom(chunk_size - len(chunk))
+            chunk += padding
+
+        hashed_filename = hashed_name(original_base_name, i + 1)
+        part_path = os.path.join(destination, hashed_filename + ".dat")
+
+        with open(part_path, "wb") as f:
+            f.write(master_hash)
+            f.write(chunk)
+        f.close()
+
+    logging.info(f"Encrypted file split into {total_parts} padded parts at '{destination}'")
+
 def encrypt_file(source: str, destination: str, password: str):
     try:
         logging.info(f"Encrypting files from source: {source}")
@@ -129,40 +153,34 @@ def encrypt_file(source: str, destination: str, password: str):
             conn.execute("BEGIN")
             for root, _, files in os.walk(source):
                 full_paths = [os.path.join(root, file) for file in files]
-                # Sort by creation time (oldest to newest)
                 full_paths.sort(key=lambda x: os.path.getctime(x))
                 for filepath in full_paths:
                     insert_file(cursor, filepath)
             conn.commit()
         logging.info("All files inserted into the database.")
         conn.close()
-        time.sleep(1)  
+        time.sleep(1) 
 
-        salt = os.urandom(16)  
-        nonce = os.urandom(12)   
-        key = derive_key(password, salt)
-        aesgcm = AESGCM(key)
-
+            
         with open("vaultr.db", "rb") as f:
-            data = f.read()
+            db_data = f.read()
         f.close()
 
-        encrypted_data = aesgcm.encrypt(nonce, data, None)
+        size_prefix = len(db_data).to_bytes(8, 'big')
+        data_with_size = size_prefix + db_data
+        salt = os.urandom(16)
+        nonce = os.urandom(12)
+        key = derive_key(password, salt)
+        aesgcm = AESGCM(key)
+        encrypted_data = aesgcm.encrypt(nonce, data_with_size, None)
         encrypted_content = salt + nonce + encrypted_data
 
         base_name = os.path.basename(os.path.normpath(source))
-        enc_file_name = base_name + ".enc"
-        enc_file_path = os.path.join(destination, enc_file_name)
-
-        if not os.path.exists(destination):
-            os.makedirs(destination)
-
-        with open(enc_file_path, "wb") as f:
-            f.write(encrypted_content)
-        f.close()
-
-        logging.info(f"File encrypted successfully: {enc_file_path}")
-
+        final_name = base_name + ".enc"
+        final_destination = os.path.join(destination, base_name + "_secure")
+        split_encrypted_file_with_padding(encrypted_content, final_destination, final_name)
+        logging.info(f"File encrypted successfully at '{final_destination}'")
+        
     except Exception as e:
         logging.error(f"Error encrypting file: {e}")
 
@@ -174,7 +192,75 @@ def encrypt_file(source: str, destination: str, password: str):
         except Exception as ex:
             logging.error(f"Error removing temporary database: {ex}")
 
-# Decrypt file
+def reassemble_and_decrypt(parts_dir: str, original_base_name: str, password: str, output_dir: str, chunk_size: int = 1024 * 1024):
+    try:
+        logging.info(f"Reassembling and decrypting from: {parts_dir}")
+
+        assembled = bytearray()
+        expected_hash = None
+        part_num = 1
+
+        while True:
+            hashed = hashed_name(original_base_name, part_num)
+            part_path = os.path.join(parts_dir, hashed + ".dat")
+
+            if not os.path.exists(part_path):
+                break  # No more parts
+
+            with open(part_path, "rb") as f:
+                content = f.read()
+
+            if len(content) < 20:
+                logging.error(f"Part {part_num} corrupted or incomplete.")
+                return
+
+            master_hash = content[:20]
+            chunk_data = content[20:]
+
+            if expected_hash is None:
+                expected_hash = master_hash
+            elif master_hash != expected_hash:
+                logging.error(f"Hash mismatch detected in part {part_num}.")
+                return
+
+            assembled.extend(chunk_data)
+            part_num += 1
+
+        if part_num == 1:
+            logging.error("No parts found to reassemble.")
+            return
+
+        encrypted_content = assembled
+        recomputed_hash = hashlib.sha1((original_base_name + ".enc").encode() + encrypted_content).digest()
+
+        if expected_hash != recomputed_hash:
+            logging.error("Final integrity check failed, aborting.")
+            return
+
+        salt = encrypted_content[:16]
+        nonce = encrypted_content[16:28]
+        ciphertext = encrypted_content[28:]
+
+        key = derive_key(password, salt)
+        aesgcm = AESGCM(key)
+
+        decrypted_data = aesgcm.decrypt(nonce, ciphertext, None)
+        size = int.from_bytes(decrypted_data[:8], 'big')
+        real_data = decrypted_data[8:8 + size]
+
+        with open("vaultr.db", "wb") as f:
+            f.write(real_data)
+
+        extraction_dir = os.path.join(output_dir, original_base_name)
+        os.makedirs(extraction_dir, exist_ok=True)
+        extract_files(extraction_dir)
+        os.remove("vaultr.db")
+
+        logging.info(f"Decryption successful. Files extracted to '{extraction_dir}'")
+
+    except Exception as e:
+        logging.error(f"Error during decryption: {e}")
+
 def decrypt_file(source: str, destination: str, password: str):
     try:
         logging.info(f"Decrypting file: {source}")
