@@ -139,10 +139,8 @@ def encrypt_file(source: str, destination: str, password: str):
         aesgcm = AESGCM(key)
         nonce = os.urandom(12)  # 96-bit nonce
 
-        data = bytearray()
         with open("vaultr.db", "rb") as f:
-            while chunk := f.read(4096):
-                data.extend(chunk)
+            data = f.read()
         f.close()
 
         encrypted_data = aesgcm.encrypt(nonce, data, None)
