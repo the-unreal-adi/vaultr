@@ -4,6 +4,8 @@ import hashlib
 import sqlite3
 import time
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
 import logging
 from datetime import datetime, timezone, timedelta
 
@@ -19,8 +21,14 @@ logging.basicConfig(
     ]
 )
 
-def derive_key(password: str) -> bytes:
-    return hashlib.sha256(password.encode()).digest()
+def derive_key(password: str, salt: bytes) -> bytes:
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100_000,
+    )
+    return kdf.derive(password.encode())
 
 def initialize_package():
     try:
@@ -135,20 +143,24 @@ def encrypt_file(source: str, destination: str, password: str):
         conn.close()
         time.sleep(1)  
 
-        key = derive_key(password)
+        salt = os.urandom(16)  
+        nonce = os.urandom(12)   
+        key = derive_key(password, salt)
         aesgcm = AESGCM(key)
-        nonce = os.urandom(12)  # 96-bit nonce
 
         with open("vaultr.db", "rb") as f:
             data = f.read()
         f.close()
 
         encrypted_data = aesgcm.encrypt(nonce, data, None)
-        encrypted_content = nonce + encrypted_data
+        encrypted_content = salt + nonce + encrypted_data
 
         base_name = os.path.basename(os.path.normpath(source))
         enc_file_name = base_name + ".enc"
         enc_file_path = os.path.join(destination, enc_file_name)
+
+        if not os.path.exists(destination):
+            os.makedirs(destination)
 
         with open(enc_file_path, "wb") as f:
             f.write(encrypted_content)
@@ -179,15 +191,15 @@ def decrypt_file(source: str, destination: str, password: str):
             logging.error(f"Source file {source} does not exist.")
             return
         
-        key = derive_key(password)
-        aesgcm = AESGCM(key)
-
         with open(source, "rb") as f:
             content = f.read()
         f.close()
 
-        nonce = content[:12]
-        encrypted_data = content[12:]
+        salt = content[:16]   
+        nonce = content[16:28]   
+        encrypted_data = content[28:]
+        key = derive_key(password, salt)
+        aesgcm = AESGCM(key)
 
         try:
             decrypted_data = aesgcm.decrypt(nonce, encrypted_data, None)
