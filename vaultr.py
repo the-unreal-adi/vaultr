@@ -272,55 +272,6 @@ def decrypt_data(source: str, destination: str, password: str, chunk_size: int =
     except Exception as e:
         logging.error(f"Error during decryption: {e}")
 
-def decrypt_file_old(source: str, destination: str, password: str):
-    try:
-        logging.info(f"Decrypting file: {source}")
-        if not source.endswith(".enc"):
-            logging.error("Source file is not an encrypted file (.enc).")
-            return
-        
-        if not os.path.exists(source):
-            logging.error(f"Source file {source} does not exist.")
-            return
-        
-        with open(source, "rb") as f:
-            content = f.read()
-        f.close()
-
-        salt = content[:16]   
-        nonce = content[16:28]   
-        encrypted_data = content[28:]
-        key = derive_key(password, salt)
-        aesgcm = AESGCM(key)
-
-        try:
-            decrypted_data = aesgcm.decrypt(nonce, encrypted_data, None)
-        except Exception:
-            logging.error("Decryption failed. Invalid password or corrupted file.")
-            return
-
-        with open("vaultr.db", "wb") as f:
-            f.write(decrypted_data)
-        f.close()
-
-        extraction_dir = os.path.join(destination, os.path.basename(source).replace(".enc", ""))
-        if not os.path.exists(extraction_dir):
-            os.makedirs(extraction_dir)
-        
-        extract_files(extraction_dir)
-
-        print(f"File decrypted: {destination}")
-    except Exception as e:
-        logging.error(f"Error decrypting file: {e}")
-        return
-    finally:
-        try:
-            time.sleep(1)  
-            os.remove("vaultr.db")
-            logging.info("Temporary database file removed after decryption.")
-        except Exception as ex:
-            logging.error(f"Error removing temporary database: {ex}")
-
 def main():
     parser = argparse.ArgumentParser(description="VaultR - Secure File Encryptor")
     parser.add_argument("action", choices=["encrypt", "decrypt"], help="Choose to encrypt or decrypt files")
