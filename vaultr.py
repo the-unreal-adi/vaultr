@@ -126,8 +126,10 @@ def split_encrypted_file_with_padding(encrypted_content: bytes, destination: str
         chunk = encrypted_content[start:end]
 
         if len(chunk) < chunk_size:
-            padding = os.urandom(chunk_size - len(chunk))
-            chunk += padding
+            pad_len = chunk_size - len(chunk) - 2  
+            if pad_len >= 0:
+                padding = os.urandom(pad_len)
+                chunk += padding + pad_len.to_bytes(2, 'big')
 
         hashed_filename = hashed_name(original_base_name, i + 1)
         part_path = os.path.join(destination, hashed_filename + ".dat")
@@ -166,19 +168,16 @@ def encrypt_data(source: str, destination: str, password: str):
             db_data = f.read()
         f.close()
 
-        size_prefix = len(db_data).to_bytes(8, 'big')
-        data_with_size = size_prefix + db_data
         salt = os.urandom(16)
         nonce = os.urandom(12)
         key = derive_key(password, salt)
         aesgcm = AESGCM(key)
-        encrypted_data = aesgcm.encrypt(nonce, data_with_size, None)
+        encrypted_data = aesgcm.encrypt(nonce, db_data, None)
         encrypted_content = salt + nonce + encrypted_data
 
         base_name = os.path.basename(os.path.normpath(source))
-        final_name = base_name + ".enc"
         final_destination = os.path.join(destination, base_name + "_secure")
-        split_encrypted_file_with_padding(encrypted_content, final_destination, final_name)
+        split_encrypted_file_with_padding(encrypted_content, final_destination, base_name)
         logging.info(f"File encrypted successfully at '{final_destination}'")
         
     except Exception as e:
@@ -234,27 +233,34 @@ def decrypt_data(source: str, destination: str, password: str, chunk_size: int =
         if part_num == 1:
             logging.error("No parts found to reassemble.")
             return
+       
+        if len(assembled) < 2:
+             raise ValueError("Data too short to contain padding footer.")
 
+        pad_len = int.from_bytes(assembled[-2:], 'big')
+        if 0 <= pad_len <= chunk_size - 2:
+            assembled = assembled[:-pad_len - 2]
+        else:
+            raise ValueError(f"Invalid pad length: {pad_len}")
+        
         encrypted_content = assembled
-        recomputed_hash = hashlib.sha1((original_base_name + ".enc").encode() + encrypted_content).digest()
+        recomputed_hash = hashlib.sha1((original_base_name).encode() + encrypted_content).digest()
 
         if expected_hash != recomputed_hash:
             logging.error("Final integrity check failed, aborting.")
             return
 
-        salt = encrypted_content[:16]
-        nonce = encrypted_content[16:28]
-        ciphertext = encrypted_content[28:]
+        salt = bytes(encrypted_content[:16])
+        nonce = bytes(encrypted_content[16:28])
+        ciphertext = bytes(encrypted_content[28:])
 
         key = derive_key(password, salt)
         aesgcm = AESGCM(key)
 
         decrypted_data = aesgcm.decrypt(nonce, ciphertext, None)
-        size = int.from_bytes(decrypted_data[:8], 'big')
-        real_data = decrypted_data[8:8 + size]
 
         with open("vaultr.db", "wb") as f:
-            f.write(real_data)
+            f.write(decrypted_data)
         f.close()
 
         os.makedirs(destination, exist_ok=True)
