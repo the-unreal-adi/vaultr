@@ -139,7 +139,7 @@ def split_encrypted_file_with_padding(encrypted_content: bytes, destination: str
 
     logging.info(f"Encrypted file split into {total_parts} padded parts at '{destination}'")
 
-def encrypt_file(source: str, destination: str, password: str):
+def encrypt_data(source: str, destination: str, password: str):
     try:
         logging.info(f"Encrypting files from source: {source}")
         initialize_package()
@@ -192,9 +192,13 @@ def encrypt_file(source: str, destination: str, password: str):
         except Exception as ex:
             logging.error(f"Error removing temporary database: {ex}")
 
-def reassemble_and_decrypt(parts_dir: str, original_base_name: str, password: str, output_dir: str, chunk_size: int = 1024 * 1024):
+def decrypt_data(source: str, destination: str, password: str, chunk_size: int = 1024 * 1024):
     try:
-        logging.info(f"Reassembling and decrypting from: {parts_dir}")
+        logging.info(f"Reassembling and decrypting from: {source}")
+
+        original_base_name = os.path.basename(os.path.normpath(destination))
+
+        logging.info(f"Reassembling and decrypting from: {original_base_name}")
 
         assembled = bytearray()
         expected_hash = None
@@ -202,13 +206,14 @@ def reassemble_and_decrypt(parts_dir: str, original_base_name: str, password: st
 
         while True:
             hashed = hashed_name(original_base_name, part_num)
-            part_path = os.path.join(parts_dir, hashed + ".dat")
+            part_path = os.path.join(source, hashed + ".dat")
 
             if not os.path.exists(part_path):
                 break  # No more parts
 
             with open(part_path, "rb") as f:
                 content = f.read()
+            f.close()
 
             if len(content) < 20:
                 logging.error(f"Part {part_num} corrupted or incomplete.")
@@ -250,18 +255,18 @@ def reassemble_and_decrypt(parts_dir: str, original_base_name: str, password: st
 
         with open("vaultr.db", "wb") as f:
             f.write(real_data)
+        f.close()
 
-        extraction_dir = os.path.join(output_dir, original_base_name)
-        os.makedirs(extraction_dir, exist_ok=True)
-        extract_files(extraction_dir)
+        os.makedirs(destination, exist_ok=True)
+        extract_files(destination)
         os.remove("vaultr.db")
 
-        logging.info(f"Decryption successful. Files extracted to '{extraction_dir}'")
+        logging.info(f"Decryption successful. Files extracted to '{destination}'")
 
     except Exception as e:
         logging.error(f"Error during decryption: {e}")
 
-def decrypt_file(source: str, destination: str, password: str):
+def decrypt_file_old(source: str, destination: str, password: str):
     try:
         logging.info(f"Decrypting file: {source}")
         if not source.endswith(".enc"):
@@ -320,9 +325,9 @@ def main():
     args = parser.parse_args()
 
     if args.action == "encrypt":
-        encrypt_file(args.source, args.destination, args.password)
+        encrypt_data(args.source, args.destination, args.password)
     elif args.action == "decrypt":
-        decrypt_file(args.source, args.destination, args.password)
+        decrypt_data(args.source, args.destination, args.password)
 
 if __name__ == "__main__":
     main()
