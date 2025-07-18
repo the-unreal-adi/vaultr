@@ -176,7 +176,7 @@ def encrypt_data(source: str, destination: str, password: str):
         encrypted_content = salt + nonce + encrypted_data
 
         base_name = os.path.basename(os.path.normpath(source))
-        final_destination = os.path.join(destination, base_name + "_secure")
+        final_destination = os.path.join(destination, hashlib.sha1((base_name + "_secure").encode()).hexdigest())
         split_encrypted_file_with_padding(encrypted_content, final_destination, base_name)
         logging.info(f"File encrypted successfully at '{final_destination}'")
         
