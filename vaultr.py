@@ -113,7 +113,7 @@ def hashed_name(base_name: str, chunk_number: int) -> str:
     raw = f"{base_name}_{chunk_number:05d}".encode()
     return hashlib.sha1(raw).hexdigest()
 
-def split_encrypted_file_with_padding(encrypted_content: bytes, destination: str, original_base_name: str, chunk_size: int = 1024 * 1024):
+def split_encrypted_file_with_padding(encrypted_content: bytes, destination: str, original_base_name: str, chunk_size: int = 512 * 1024):
     os.makedirs(destination, exist_ok=True)
 
     master_hash = hashlib.sha1(original_base_name.encode() + encrypted_content).digest()
@@ -125,11 +125,15 @@ def split_encrypted_file_with_padding(encrypted_content: bytes, destination: str
         end = start + chunk_size
         chunk = encrypted_content[start:end]
 
-        if len(chunk) < chunk_size:
-            pad_len = chunk_size - len(chunk) - 2  
-            if pad_len >= 0:
-                padding = os.urandom(pad_len)
-                chunk += padding + pad_len.to_bytes(2, 'big')
+        try:
+            if len(chunk) < chunk_size:
+                pad_len = chunk_size - len(chunk) - 4  
+                if pad_len >= 0:
+                    padding = os.urandom(pad_len)
+                    chunk += padding + pad_len.to_bytes(4, 'big')
+        except Exception as e:
+            logging.error(f"Error during padding: {e}")
+            continue
 
         hashed_filename = hashed_name(original_base_name, i + 1)
         part_path = os.path.join(destination, hashed_filename + ".dat")
@@ -191,13 +195,9 @@ def encrypt_data(source: str, destination: str, password: str):
         except Exception as ex:
             logging.error(f"Error removing temporary database: {ex}")
 
-def decrypt_data(source: str, destination: str, password: str, chunk_size: int = 1024 * 1024):
+def decrypt_data(source: str, destination: str, password: str, chunk_size: int = 512 * 1024):
     try:
-        logging.info(f"Reassembling and decrypting from: {source}")
-
         original_base_name = os.path.basename(os.path.normpath(destination))
-
-        logging.info(f"Reassembling and decrypting from: {original_base_name}")
 
         assembled = bytearray()
         expected_hash = None
@@ -234,12 +234,12 @@ def decrypt_data(source: str, destination: str, password: str, chunk_size: int =
             logging.error("No parts found to reassemble.")
             return
        
-        if len(assembled) < 2:
+        if len(assembled) < 4:
              raise ValueError("Data too short to contain padding footer.")
 
-        pad_len = int.from_bytes(assembled[-2:], 'big')
-        if 0 <= pad_len <= chunk_size - 2:
-            assembled = assembled[:-pad_len - 2]
+        pad_len = int.from_bytes(assembled[-4:], 'big')
+        if 0 <= pad_len <= chunk_size - 4:
+            assembled = assembled[:-pad_len - 4]
         else:
             raise ValueError(f"Invalid pad length: {pad_len}")
         
