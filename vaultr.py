@@ -6,9 +6,11 @@ import sqlite3
 import time
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
 from cryptography.hazmat.primitives import hashes
 import logging
 from datetime import datetime, timezone, timedelta
+from enum import Enum, auto
 
 os.makedirs("logs", exist_ok=True)
 
@@ -21,13 +23,29 @@ logging.basicConfig(
     ]
 )
 
-def derive_key(password: str, salt: bytes) -> bytes:
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=100_000,
-    )
+class KDFAlgorithm(Enum):
+    PBKDF2 = auto()
+    ARGON2ID = auto()
+
+def derive_key(password: str, salt: bytes, algorithm: KDFAlgorithm = KDFAlgorithm.PBKDF2) -> bytes:
+    if algorithm == KDFAlgorithm.PBKDF2:
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100_000,
+        )
+    elif algorithm == KDFAlgorithm.ARGON2ID:
+        kdf = Argon2id(
+            salt=salt,
+            length=32,
+            iterations=3,
+            lanes=2, 
+            memory_cost=256 * 1024,
+        )
+    else:
+        raise ValueError("Unsupported KDF algorithm")
+
     return kdf.derive(password.encode())
 
 def initialize_package():
@@ -174,12 +192,13 @@ def encrypt_data(source: str, destination: str, password: str):
 
         salt = os.urandom(16)
         nonce = os.urandom(12)
-        key = derive_key(password, salt)
+        base_name = os.path.basename(os.path.normpath(source))
+        final_salt = hashlib.sha256(salt + base_name.encode()).digest()
+        key = derive_key(password, final_salt)
         aesgcm = AESGCM(key)
         encrypted_data = aesgcm.encrypt(nonce, db_data, None)
         encrypted_content = salt + nonce + encrypted_data
 
-        base_name = os.path.basename(os.path.normpath(source))
         final_destination = os.path.join(destination, hashlib.sha1((base_name + "_secure" + str(time.time())).encode()).hexdigest())
         split_encrypted_file_with_padding(encrypted_content, final_destination, base_name)
         logging.info(f"File encrypted successfully at '{final_destination}'")
@@ -254,7 +273,9 @@ def decrypt_data(source: str, destination: str, password: str, chunk_size: int =
         nonce = bytes(encrypted_content[16:28])
         ciphertext = bytes(encrypted_content[28:])
 
-        key = derive_key(password, salt)
+        final_salt = hashlib.sha256(salt + original_base_name.encode()).digest()
+
+        key = derive_key(password, final_salt)
         aesgcm = AESGCM(key)
 
         decrypted_data = aesgcm.decrypt(nonce, ciphertext, None)
