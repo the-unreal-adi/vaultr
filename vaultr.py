@@ -23,19 +23,19 @@ logging.basicConfig(
     ]
 )
 
-class KDFAlgorithm(Enum):
+class CryptographyAlgorithm(Enum):
     PBKDF2 = auto()
     ARGON2ID = auto()
 
-def derive_key(password: str, salt: bytes, algorithm: KDFAlgorithm = KDFAlgorithm.PBKDF2) -> bytes:
-    if algorithm == KDFAlgorithm.PBKDF2:
+def derive_key(password: str, salt: bytes, algorithm: CryptographyAlgorithm = CryptographyAlgorithm.PBKDF2) -> bytes:
+    if algorithm == CryptographyAlgorithm.PBKDF2:
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
             salt=salt,
             iterations=100_000,
         )
-    elif algorithm == KDFAlgorithm.ARGON2ID:
+    elif algorithm == CryptographyAlgorithm.ARGON2ID:
         kdf = Argon2id(
             salt=salt,
             length=32,
